@@ -136,6 +136,8 @@ static int maxim_thermocouple_read(struct maxim_thermocouple_data *data,
 		ret = spi_read(data->spi, (void *)&buf32, storage_bytes);
 		*val = be32_to_cpu(buf32);
 		break;
+	default:
+		ret = -EINVAL;
 	}
 
 	if (ret)
@@ -229,6 +231,7 @@ static int maxim_thermocouple_probe(struct spi_device *spi)
 	indio_dev->available_scan_masks = chip->scan_masks;
 	indio_dev->num_channels = chip->num_channels;
 	indio_dev->modes = INDIO_DIRECT_MODE;
+	indio_dev->dev.parent = &spi->dev;
 
 	data = iio_priv(indio_dev);
 	data->spi = spi;
@@ -264,6 +267,7 @@ static int maxim_thermocouple_remove(struct spi_device *spi)
 static const struct spi_device_id maxim_thermocouple_id[] = {
 	{"max6675", MAX6675},
 	{"max31855", MAX31855},
+	{"max31856", MAX31855},
 	{},
 };
 MODULE_DEVICE_TABLE(spi, maxim_thermocouple_id);

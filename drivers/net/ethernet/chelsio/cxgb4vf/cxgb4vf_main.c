@@ -70,13 +70,6 @@
 			 NETIF_MSG_TIMER | NETIF_MSG_IFDOWN | NETIF_MSG_IFUP |\
 			 NETIF_MSG_RX_ERR | NETIF_MSG_TX_ERR)
 
-static int dflt_msg_enable = DFLT_MSG_ENABLE;
-
-module_param(dflt_msg_enable, int, 0644);
-MODULE_PARM_DESC(dflt_msg_enable,
-		 "default adapter ethtool message level bitmap, "
-		 "deprecated parameter");
-
 /*
  * The driver uses the best interrupt scheme available on a platform in the
  * order MSI-X then MSI.  This parameter determines which of these schemes the
@@ -165,20 +158,23 @@ void t4vf_os_link_changed(struct adapter *adapter, int pidx, int link_ok)
 		netif_carrier_on(dev);
 
 		switch (pi->link_cfg.speed) {
-		case 40000:
-			s = "40Gbps";
+		case 100:
+			s = "100Mbps";
 			break;
-
+		case 1000:
+			s = "1Gbps";
+			break;
 		case 10000:
 			s = "10Gbps";
 			break;
-
-		case 1000:
-			s = "1000Mbps";
+		case 25000:
+			s = "25Gbps";
 			break;
-
-		case 100:
-			s = "100Mbps";
+		case 40000:
+			s = "40Gbps";
+			break;
+		case 100000:
+			s = "100Gbps";
 			break;
 
 		default:
@@ -1107,10 +1103,6 @@ static int cxgb4vf_change_mtu(struct net_device *dev, int new_mtu)
 {
 	int ret;
 	struct port_info *pi = netdev_priv(dev);
-
-	/* accommodate SACK */
-	if (new_mtu < 81)
-		return -EINVAL;
 
 	ret = t4vf_set_rxmode(pi->adapter, pi->viid, new_mtu,
 			      -1, -1, -1, -1, true);
@@ -2895,7 +2887,25 @@ static int cxgb4vf_pci_probe(struct pci_dev *pdev,
 	 * Initialize adapter level features.
 	 */
 	adapter->name = pci_name(pdev);
-	adapter->msg_enable = dflt_msg_enable;
+	adapter->msg_enable = DFLT_MSG_ENABLE;
+
+	/* If possible, we use PCIe Relaxed Ordering Attribute to deliver
+	 * Ingress Packet Data to Free List Buffers in order to allow for
+	 * chipset performance optimizations between the Root Complex and
+	 * Memory Controllers.  (Messages to the associated Ingress Queue
+	 * notifying new Packet Placement in the Free Lists Buffers will be
+	 * send without the Relaxed Ordering Attribute thus guaranteeing that
+	 * all preceding PCIe Transaction Layer Packets will be processed
+	 * first.)  But some Root Complexes have various issues with Upstream
+	 * Transaction Layer Packets with the Relaxed Ordering Attribute set.
+	 * The PCIe devices which under the Root Complexes will be cleared the
+	 * Relaxed Ordering bit in the configuration space, So we check our
+	 * PCIe configuration space to see if it's flagged with advice against
+	 * using Relaxed Ordering.
+	 */
+	if (!pcie_relaxed_ordering_enabled(pdev))
+		adapter->flags |= ROOT_NO_RELAXED_ORDERING;
+
 	err = adap_init0(adapter);
 	if (err)
 		goto err_unmap_bar;
@@ -2966,9 +2976,12 @@ static int cxgb4vf_pci_probe(struct pci_dev *pdev,
 			netdev->features |= NETIF_F_HIGHDMA;
 
 		netdev->priv_flags |= IFF_UNICAST_FLT;
+		netdev->min_mtu = 81;
+		netdev->max_mtu = ETH_MAX_MTU;
 
 		netdev->netdev_ops = &cxgb4vf_netdev_ops;
 		netdev->ethtool_ops = &cxgb4vf_ethtool_ops;
+		netdev->dev_port = pi->port_id;
 
 		/*
 		 * Initialize the hardware/software state for the port.

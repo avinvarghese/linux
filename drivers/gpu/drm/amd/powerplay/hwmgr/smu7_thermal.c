@@ -30,7 +30,7 @@ int smu7_fan_ctrl_get_fan_speed_info(struct pp_hwmgr *hwmgr,
 		struct phm_fan_speed_info *fan_speed_info)
 {
 	if (hwmgr->thermal_controller.fanInfo.bNoFan)
-		return 0;
+		return -ENODEV;
 
 	fan_speed_info->supports_percent_read = true;
 	fan_speed_info->supports_percent_write = true;
@@ -60,7 +60,7 @@ int smu7_fan_ctrl_get_fan_speed_percent(struct pp_hwmgr *hwmgr,
 	uint64_t tmp64;
 
 	if (hwmgr->thermal_controller.fanInfo.bNoFan)
-		return 0;
+		return -ENODEV;
 
 	duty100 = PHM_READ_VFPF_INDIRECT_FIELD(hwmgr->device, CGS_IND_REG__SMC,
 			CG_FDO_CTRL1, FMAX_DUTY100);
@@ -89,7 +89,7 @@ int smu7_fan_ctrl_get_fan_speed_rpm(struct pp_hwmgr *hwmgr, uint32_t *speed)
 	if (hwmgr->thermal_controller.fanInfo.bNoFan ||
 			(hwmgr->thermal_controller.fanInfo.
 				ucTachometerPulsesPerRevolution == 0))
-		return 0;
+		return -ENODEV;
 
 	tach_period = PHM_READ_VFPF_INDIRECT_FIELD(hwmgr->device, CGS_IND_REG__SMC,
 			CG_TACH_STATUS, TACH_PERIOD);
@@ -112,10 +112,9 @@ int smu7_fan_ctrl_get_fan_speed_rpm(struct pp_hwmgr *hwmgr, uint32_t *speed)
 */
 int smu7_fan_ctrl_set_static_mode(struct pp_hwmgr *hwmgr, uint32_t mode)
 {
-
 	if (hwmgr->fan_ctrl_is_in_default_mode) {
 		hwmgr->fan_ctrl_default_mode =
-				PHM_READ_VFPF_INDIRECT_FIELD(hwmgr->device,	CGS_IND_REG__SMC,
+				PHM_READ_VFPF_INDIRECT_FIELD(hwmgr->device, CGS_IND_REG__SMC,
 						CG_FDO_CTRL2, FDO_PWM_MODE);
 		hwmgr->tmin =
 				PHM_READ_VFPF_INDIRECT_FIELD(hwmgr->device, CGS_IND_REG__SMC,
@@ -149,7 +148,7 @@ int smu7_fan_ctrl_set_default_mode(struct pp_hwmgr *hwmgr)
 	return 0;
 }
 
-static int smu7_fan_ctrl_start_smc_fan_control(struct pp_hwmgr *hwmgr)
+int smu7_fan_ctrl_start_smc_fan_control(struct pp_hwmgr *hwmgr)
 {
 	int result;
 
@@ -179,6 +178,7 @@ static int smu7_fan_ctrl_start_smc_fan_control(struct pp_hwmgr *hwmgr)
 				PPSMC_MSG_SetFanTemperatureTarget,
 				hwmgr->thermal_controller.
 				advanceFanControlParameters.ucTargetTemperature);
+	hwmgr->fan_ctrl_enabled = true;
 
 	return result;
 }
@@ -186,6 +186,7 @@ static int smu7_fan_ctrl_start_smc_fan_control(struct pp_hwmgr *hwmgr)
 
 int smu7_fan_ctrl_stop_smc_fan_control(struct pp_hwmgr *hwmgr)
 {
+	hwmgr->fan_ctrl_enabled = false;
 	return smum_send_msg_to_smc(hwmgr->smumgr, PPSMC_StopFanControl);
 }
 
@@ -280,7 +281,7 @@ int smu7_fan_ctrl_set_fan_speed_rpm(struct pp_hwmgr *hwmgr, uint32_t speed)
 	PHM_WRITE_VFPF_INDIRECT_FIELD(hwmgr->device, CGS_IND_REG__SMC,
 				CG_TACH_STATUS, TACH_PERIOD, tach_period);
 
-	return smu7_fan_ctrl_set_static_mode(hwmgr, FDO_PWM_MODE_STATIC);
+	return smu7_fan_ctrl_set_static_mode(hwmgr, FDO_PWM_MODE_STATIC_RPM);
 }
 
 /**
@@ -506,18 +507,18 @@ static int tf_smu7_thermal_disable_alert(struct pp_hwmgr *hwmgr,
 
 static const struct phm_master_table_item
 phm_thermal_start_thermal_controller_master_list[] = {
-	{NULL, tf_smu7_thermal_initialize},
-	{NULL, tf_smu7_thermal_set_temperature_range},
-	{NULL, tf_smu7_thermal_enable_alert},
-	{NULL, smum_thermal_avfs_enable},
+	{ .tableFunction = tf_smu7_thermal_initialize },
+	{ .tableFunction = tf_smu7_thermal_set_temperature_range },
+	{ .tableFunction = tf_smu7_thermal_enable_alert },
+	{ .tableFunction = smum_thermal_avfs_enable },
 /* We should restrict performance levels to low before we halt the SMC.
  * On the other hand we are still in boot state when we do this
  * so it would be pointless.
  * If this assumption changes we have to revisit this table.
  */
-	{NULL, smum_thermal_setup_fan_table},
-	{NULL, tf_smu7_thermal_start_smc_fan_control},
-	{NULL, NULL}
+	{ .tableFunction = smum_thermal_setup_fan_table },
+	{ .tableFunction = tf_smu7_thermal_start_smc_fan_control },
+	{ }
 };
 
 static const struct phm_master_table_header
@@ -529,10 +530,10 @@ phm_thermal_start_thermal_controller_master = {
 
 static const struct phm_master_table_item
 phm_thermal_set_temperature_range_master_list[] = {
-	{NULL, tf_smu7_thermal_disable_alert},
-	{NULL, tf_smu7_thermal_set_temperature_range},
-	{NULL, tf_smu7_thermal_enable_alert},
-	{NULL, NULL}
+	{ .tableFunction = tf_smu7_thermal_disable_alert },
+	{ .tableFunction = tf_smu7_thermal_set_temperature_range },
+	{ .tableFunction = tf_smu7_thermal_enable_alert },
+	{ }
 };
 
 static const struct phm_master_table_header
@@ -575,3 +576,9 @@ int pp_smu7_thermal_initialize(struct pp_hwmgr *hwmgr)
 	return result;
 }
 
+void pp_smu7_thermal_fini(struct pp_hwmgr *hwmgr)
+{
+	phm_destroy_table(hwmgr, &(hwmgr->set_temperature_range));
+	phm_destroy_table(hwmgr, &(hwmgr->start_thermal_controller));
+	return;
+}

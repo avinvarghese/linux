@@ -25,7 +25,12 @@
 static void fsl_dcu_drm_crtc_atomic_flush(struct drm_crtc *crtc,
 					  struct drm_crtc_state *old_crtc_state)
 {
+	struct drm_device *dev = crtc->dev;
+	struct fsl_dcu_drm_device *fsl_dev = dev->dev_private;
 	struct drm_pending_vblank_event *event = crtc->state->event;
+
+	regmap_write(fsl_dev->regmap,
+		     DCU_UPDATE_MODE, DCU_UPDATE_MODE_READREG);
 
 	if (event) {
 		crtc->state->event = NULL;
@@ -39,10 +44,14 @@ static void fsl_dcu_drm_crtc_atomic_flush(struct drm_crtc *crtc,
 	}
 }
 
-static void fsl_dcu_drm_disable_crtc(struct drm_crtc *crtc)
+static void fsl_dcu_drm_crtc_atomic_disable(struct drm_crtc *crtc,
+					struct drm_crtc_state *old_crtc_state)
 {
 	struct drm_device *dev = crtc->dev;
 	struct fsl_dcu_drm_device *fsl_dev = dev->dev_private;
+
+	/* always disable planes on the CRTC */
+	drm_atomic_helper_disable_planes_on_crtc(old_crtc_state, true);
 
 	drm_crtc_vblank_off(crtc);
 
@@ -122,11 +131,35 @@ static void fsl_dcu_drm_crtc_mode_set_nofb(struct drm_crtc *crtc)
 }
 
 static const struct drm_crtc_helper_funcs fsl_dcu_drm_crtc_helper_funcs = {
+	.atomic_disable = fsl_dcu_drm_crtc_atomic_disable,
 	.atomic_flush = fsl_dcu_drm_crtc_atomic_flush,
-	.disable = fsl_dcu_drm_disable_crtc,
 	.enable = fsl_dcu_drm_crtc_enable,
 	.mode_set_nofb = fsl_dcu_drm_crtc_mode_set_nofb,
 };
+
+static int fsl_dcu_drm_crtc_enable_vblank(struct drm_crtc *crtc)
+{
+	struct drm_device *dev = crtc->dev;
+	struct fsl_dcu_drm_device *fsl_dev = dev->dev_private;
+	unsigned int value;
+
+	regmap_read(fsl_dev->regmap, DCU_INT_MASK, &value);
+	value &= ~DCU_INT_MASK_VBLANK;
+	regmap_write(fsl_dev->regmap, DCU_INT_MASK, value);
+
+	return 0;
+}
+
+static void fsl_dcu_drm_crtc_disable_vblank(struct drm_crtc *crtc)
+{
+	struct drm_device *dev = crtc->dev;
+	struct fsl_dcu_drm_device *fsl_dev = dev->dev_private;
+	unsigned int value;
+
+	regmap_read(fsl_dev->regmap, DCU_INT_MASK, &value);
+	value |= DCU_INT_MASK_VBLANK;
+	regmap_write(fsl_dev->regmap, DCU_INT_MASK, value);
+}
 
 static const struct drm_crtc_funcs fsl_dcu_drm_crtc_funcs = {
 	.atomic_duplicate_state = drm_atomic_helper_crtc_duplicate_state,
@@ -135,6 +168,8 @@ static const struct drm_crtc_funcs fsl_dcu_drm_crtc_funcs = {
 	.page_flip = drm_atomic_helper_page_flip,
 	.reset = drm_atomic_helper_crtc_reset,
 	.set_config = drm_atomic_helper_set_config,
+	.enable_vblank = fsl_dcu_drm_crtc_enable_vblank,
+	.disable_vblank = fsl_dcu_drm_crtc_disable_vblank,
 };
 
 int fsl_dcu_drm_crtc_create(struct fsl_dcu_drm_device *fsl_dev)

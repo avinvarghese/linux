@@ -671,7 +671,12 @@ static void init_idmac_channel(struct ipu_image_convert_ctx *ctx,
 	ipu_ic_task_idma_init(chan->ic, channel, width, height,
 			      burst_size, rot_mode);
 
-	ipu_cpmem_set_axi_id(channel, 1);
+	/*
+	 * Setting a non-zero AXI ID collides with the PRG AXI snooping, so
+	 * only do this when there is no PRG present.
+	 */
+	if (!channel->ipu->prg_priv)
+		ipu_cpmem_set_axi_id(channel, 1);
 
 	ipu_idmac_set_double_buffer(channel, ctx->double_buffering);
 }
@@ -1617,7 +1622,7 @@ ipu_image_convert(struct ipu_soc *ipu, enum ipu_ic_task ic_task,
 	ctx = ipu_image_convert_prepare(ipu, ic_task, in, out, rot_mode,
 					complete, complete_context);
 	if (IS_ERR(ctx))
-		return ERR_PTR(PTR_ERR(ctx));
+		return ERR_CAST(ctx);
 
 	run = kzalloc(sizeof(*run), GFP_KERNEL);
 	if (!run) {
